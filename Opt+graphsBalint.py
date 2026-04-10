@@ -7,7 +7,7 @@ import gurobipy
 
 class Solver:
 
-    def __init__(self) -> None:
+    def __init__(self, max_capacity=5.0) -> None:
         print("Initializing Solver")
 
         self.df = pd.read_csv(
@@ -18,7 +18,7 @@ class Solver:
         self.parameters = {
             "initial_charge": 2,
             "min_charge": 0.5,
-            "max_charge": 5,
+            "max_charge": max_capacity,
             "charging_power_limit": 2,
             "discharging_power_limit": 2,
             "charging_efficiency": 0.95,
@@ -28,6 +28,17 @@ class Solver:
         self.grid_fee = 0
         self.solver_name = mip.GUROBI
         self.detail_results = {}
+
+    def set_max_capacity(self, max_capacity, adjust_initial_charge=False):
+
+        if self.parameters["min_charge"] > max_capacity:
+            raise ValueError("max_capacity must be at least as large as min_charge")
+        else:
+            self.parameters["max_charge"] = float(max_capacity)
+
+        if adjust_initial_charge and self.parameters["initial_charge"] > max_capacity:
+            self.parameters["initial_charge"] = float(max_capacity)
+
 
     def solve_bo_mip(self):
         price = self.df["Price (EUR/kWh)"].to_numpy()
@@ -556,26 +567,61 @@ class Solver:
 
 if __name__ == "__main__":
     solver = Solver()
-    fees = [0.00, 0.01, 0.02, 0.03, 0.04, 0.05]
-    all_results = []
+
+    fees = [0.00, 0.01, 0.02, 0.03, 0.04]
+    realistic_fee = 0.00
+    capacities = [5, 7.5, 10, 13.5, 15, 20, 23.5, 27, 31, 35, 38, 40.5, 54, 81, 108, 130]
 
     for f in fees:
         solver.grid_fee = f
-        all_results.append(solver.solve_bo_mip())
-        all_results.append(solver.solve_to_mip())
+        fee_results = []
 
-    results = pd.concat(all_results, ignore_index=True)
-    print(results.to_string(index=False))
-    results = pd.concat(all_results, ignore_index=True)
-    print(results.to_string(index=False))
-    # solver.plot_delta_soc_histogram(solver.last_detail_results)
+        for cap in capacities:
+            solver.set_max_capacity(cap)
 
-    results = pd.concat(all_results, ignore_index=True)
-    print(results.to_string(index=False))
-    print(results[["model", "grid_fee", "baseline_cost", "battery_term", "solver_objective"]].to_string(index=False))
+            bo_res = solver.solve_bo_mip()
+            bo_res["battery_capacity_kwh"] = cap
+            fee_results.append(bo_res)
 
-    for f in fees:
-        # solver.plot_fast(solver.detail_results[("BO-MIP", f)], periods=24*3, filename=f"plot_fast_bo_{f}.png")
-        # solver.plot_fast(solver.detail_results[("TO-MIP", f)], periods=24*3, filename=f"plot_fast_to_{f}.png")
-        solver.plot_price_soc_charge(solver.detail_results[("BO-MIP", f)], periods=24*3, filename=f"plot_price_soc_charge_bo_{f}.png")
-        solver.plot_price_soc_charge(solver.detail_results[("TO-MIP", f)], periods=24*3, filename=f"plot_price_soc_charge_to_{f}.png")
+            # Save BO plot for this capacity
+            if f == realistic_fee:
+                solver.plot_price_soc_charge(
+                    solver.detail_results[("BO-MIP", realistic_fee)],
+                    periods=24*14,
+                    filename=f"plot_cap{cap}_fee{realistic_fee:.2f}_BO.png"
+                )
+
+            to_res = solver.solve_to_mip()
+            to_res["battery_capacity_kwh"] = cap
+            fee_results.append(to_res)
+
+        fee_df = pd.concat(fee_results, ignore_index=True)
+
+        outname = f"capacity_sweep_fee_{f:.2f}.csv"
+        fee_df.to_csv(outname, index=False)
+        print(f"Saved {outname}")
+
+    # solver = Solver()
+    # fees = [0.00, 0.01, 0.02, 0.03, 0.04, 0.05]
+    # all_results = []
+
+    # for f in fees:
+    #     solver.grid_fee = f
+    #     all_results.append(solver.solve_bo_mip())
+    #     all_results.append(solver.solve_to_mip())
+
+    # results = pd.concat(all_results, ignore_index=True)
+    # print(results.to_string(index=False))
+    # results = pd.concat(all_results, ignore_index=True)
+    # print(results.to_string(index=False))
+    # # solver.plot_delta_soc_histogram(solver.last_detail_results)
+
+    # results = pd.concat(all_results, ignore_index=True)
+    # print(results.to_string(index=False))
+    # print(results[["model", "grid_fee", "baseline_cost", "battery_term", "solver_objective"]].to_string(index=False))
+
+    # for f in fees:
+    #     # solver.plot_fast(solver.detail_results[("BO-MIP", f)], periods=24*3, filename=f"plot_fast_bo_{f}.png")
+    #     # solver.plot_fast(solver.detail_results[("TO-MIP", f)], periods=24*3, filename=f"plot_fast_to_{f}.png")
+    #     solver.plot_price_soc_charge(solver.detail_results[("BO-MIP", f)], periods=24*3, filename=f"plot_cap{solver.parameters['max_charge']}_price_soc_charge_bo_{f}.png")
+    #     # solver.plot_price_soc_charge(solver.detail_results[("TO-MIP", f)], periods=24*3, filename=f"plot_price_soc_charge_to_{f}.png")
