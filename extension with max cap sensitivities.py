@@ -2,11 +2,12 @@ import mip
 import pandas as pd
 import numpy as np
 import time
+import matplotlib.pyplot as plt
 
 
 def load_data():
-    demand_path = "net_demand_and_price.csv"
-    forecast_path = "open-meteo-52.11N5.19E4m.csv"
+    demand_path = "/Users/balintkovacs/Documents/GitHub/LogisticsCase/net_demand_and_price.csv"
+    forecast_path = "/Users/balintkovacs/Documents/GitHub/LogisticsCase/open-meteo-52.11N5.19E4m.csv"
 
     real_df = pd.read_csv(demand_path)
     real_df["Start"] = pd.to_datetime(real_df["Start"])
@@ -51,8 +52,14 @@ def optimize_step(current_soc, prices, radiation, d_base, d_min_constraint, max_
     p_c = [model.add_var(lb=0, ub=P_C) for _ in range(horizon)]
     p_d = [model.add_var(lb=0, ub=P_D) for _ in range(horizon)]
     delta = [model.add_var(var_type=mip.BINARY) for _ in range(horizon)]
+    target_soc = S_min + 0.5 * (S_max - S_min)
 
+    dev_plus = model.add_var(lb=0, name="dev_plus")
+    dev_minus = model.add_var(lb=0, name="dev_minus")
+
+    model += e[horizon] - target_soc == dev_plus - dev_minus
     model += e[0] == current_soc
+
     for i in range(horizon):
         model += e[i + 1] == e[i] + eta_c * p_c[i] - (1 / eta_d) * p_d[i]
         model += e[i] - (1 / eta_d) * p_d[i] >= S_min
@@ -123,6 +130,8 @@ def run_simulation(real_df, forecast_df, horizon_setting, d_min_val, max_capacit
     results = pd.DataFrame(results_log)
     elapsed = time.time() - start_wall_time
 
+    plot_soc_charge_diagnostics(results, title_suffix=f"(h={horizon_setting}, d_min={d_min_val}, max_cap={max_capacity})", filename=f"sensitivity_h{horizon_setting}_dmin{d_min_val}_cap{max_capacity}.png")
+
     summary_stats = {
         "Horizon": horizon_setting,
         "D_min": d_min_val,
@@ -136,11 +145,51 @@ def run_simulation(real_df, forecast_df, horizon_setting, d_min_val, max_capacit
     }
     return summary_stats
 
+def plot_soc_charge_diagnostics(results, title_suffix="", periods=24*14, start_idx=0, filename=None):
+    df = results.iloc[start_idx:start_idx + periods].copy()
+
+    x = range(len(df))
+
+    fig, axes = plt.subplots(4, 1, figsize=(12, 10), sharex=True)
+
+    # 1. Price
+    axes[0].plot(x, df["price"].to_numpy(), linewidth=1)
+    axes[0].set_ylabel("Price")
+    axes[0].set_title(f"Electricity price {title_suffix}")
+
+    # 2. SOC
+    axes[1].plot(x, df["soc"].to_numpy(), linewidth=1)
+    axes[1].set_ylabel("SOC")
+    axes[1].set_title("State of charge")
+
+    # 3. Charge and discharge
+    axes[2].plot(x, df["charge"].to_numpy(), label="Charge", linewidth=1)
+    axes[2].plot(x, -df["discharge"].to_numpy(), label="Discharge", linewidth=1)
+    axes[2].set_ylabel("kWh")
+    axes[2].set_title("Charging and discharging")
+    axes[2].legend()
+
+    # 4. Cumulative charge vs discharge
+    axes[3].plot(x, df["charge"].cumsum().to_numpy(), label="Cumulative charge", linewidth=1)
+    axes[3].plot(x, df["discharge"].cumsum().to_numpy(), label="Cumulative discharge", linewidth=1)
+    axes[3].set_ylabel("kWh")
+    axes[3].set_xlabel("Hour index")
+    axes[3].set_title("Cumulative charge vs discharge")
+    axes[3].legend()
+
+    plt.tight_layout()
+
+    if filename is not None:
+        plt.savefig(filename, dpi=200, bbox_inches="tight")
+        plt.close()
+    else:
+        plt.show()
+
 
 if __name__ == "__main__":
     real_df, forecast_df = load_data()
     # horizons = [4, 12, "before/after14rule", 72]
-    horizons = [12, 72]
+    horizons = [12] #, 72]
     # d_mins = [-10, -1, -0.1, 0]
     d_mins = [-10, -0.1]
     capacities = [5, 7.5, 10, 13.5, 15, 20, 23.5, 27, 31]
